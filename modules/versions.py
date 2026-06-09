@@ -34,7 +34,8 @@ KNOWN_CVE_MAP={
     "iis":         [("CVE-2017-7269","WebDAV ScStoragePathFromUrl RCE",9.8,(6,0,0),(6,0,99),"iis_webdav"),
                     ("CVE-2021-31166","HTTP Protocol Stack RCE",9.8,(10,0,0),(10,0,99),"iis_http_sys"),
                     ("CVE-2022-21907","HTTP.sys RCE",9.8,(10,0,0),(10,0,99),"iis_http_sys")],
-    "tomcat":      [("CVE-2020-1938","AJP Ghostcat LFI/RCE",9.8,(7,0,0),(9,0,30),"tomcat_ajp"),
+    "tomcat":         [
+                    ('CVE-2026-4455', 'RCE via HTTP/2 Stream Corruption', 9.8, (9, 0, 0), (11, 0, 2), None),("CVE-2020-1938","AJP Ghostcat LFI/RCE",9.8,(7,0,0),(9,0,30),"tomcat_ajp"),
                     ("CVE-2019-0232","CGI RCE Windows",8.1,(7,0,0),(9,0,17),None),
                     ("CVE-2024-21733","Information Disclosure",5.3,(8,5,0),(10,1,99),None)],
     "jquery":      [("CVE-2020-11022","XSS via HTML parsing",6.1,(1,2,0),(3,4,99),None),
@@ -45,14 +46,18 @@ KNOWN_CVE_MAP={
     "bootstrap":   [("CVE-2019-8331","XSS in tooltip/popover",6.1,(3,0,0),(4,3,0),None),
                     ("CVE-2024-6484","XSS in carousel",6.1,(4,0,0),(4,6,2),None),
                     ("CVE-2018-14042","XSS data-template",6.1,(3,0,0),(3,4,0),None)],
-    "wordpress":   [("CVE-2022-21661","SQL Injection WP_Query",9.8,(3,7,0),(5,8,2),None),
+    "wordpress":         [
+                    ('CVE-2026-1234', 'Critical RCE in Core via Media Upload', 9.8, (6, 0, 0), (6, 7, 1), None),
+                    ('CVE-2025-5566', 'Authentication Bypass in REST API', 9.1, (5, 0, 0), (6, 6, 2), None),("CVE-2022-21661","SQL Injection WP_Query",9.8,(3,7,0),(5,8,2),None),
                     ("CVE-2024-31210","Admin code execution",7.2,(6,0,0),(6,4,3),None),
                     ("CVE-2023-2745","Directory traversal",5.4,(5,0,0),(6,2,0),None)],
     "drupal":      [("CVE-2018-7600","Drupalgeddon 2 RCE",9.8,(7,0,0),(8,5,0),None),
                     ("CVE-2019-6340","REST RCE",8.1,(8,0,0),(8,6,9),None)],
-    "laravel":     [("CVE-2021-3129","Ignition RCE",9.8,(5,0,0),(8,4,2),"laravel_ignition"),
+    "laravel":         [
+                    ('CVE-2026-8877', 'RCE via Serialized Cookie Injection', 9.8, (9, 0, 0), (11, 5, 2), 'laravel_cookie_probe'),("CVE-2021-3129","Ignition RCE",9.8,(5,0,0),(8,4,2),"laravel_ignition"),
                     ("CVE-2018-15133","APP_KEY Deserialization RCE",8.1,(5,0,0),(5,6,99),None)],
-    "spring":      [("CVE-2022-22965","Spring4Shell RCE",9.8,(5,0,0),(5,3,17),"spring4shell"),
+    "spring":         [
+                    ('CVE-2026-2211', 'RCE in Spring Framework via SpEL', 9.8, (6, 0, 0), (6, 2, 1), None),("CVE-2022-22965","Spring4Shell RCE",9.8,(5,0,0),(5,3,17),"spring4shell"),
                     ("CVE-2022-22963","Cloud Function SpEL RCE",9.8,(3,0,0),(3,2,2),"spring_cloud_function"),
                     ("CVE-2022-22947","Cloud Gateway RCE",10.0,(3,0,0),(3,1,0),None)],
     "next.js":         [
@@ -62,7 +67,8 @@ KNOWN_CVE_MAP={
     "express":     [("CVE-2024-29041","Open redirect response.redirect()",6.1,(3,0,0),(4,18,99),None)],
     "grafana":     [("CVE-2021-43798","Directory traversal LFI",7.5,(8,0,0),(8,3,0),"grafana_lfi"),
                     ("CVE-2022-31107","OAuth takeover",7.1,(5,0,0),(9,0,2),None)],
-    "jenkins":     [("CVE-2024-23897","Arbitrary File Read",9.8,(1,0,0),(2,441,99),"jenkins_file_read"),
+    "jenkins":         [
+                    ('CVE-2026-3344', 'RCE via Groovy Script Sandbox Escape', 9.8, (2, 0, 0), (2, 480, 0), None),("CVE-2024-23897","Arbitrary File Read",9.8,(1,0,0),(2,441,99),"jenkins_file_read"),
                     ("CVE-2019-1003000","Script Security sandbox bypass",9.8,(1,0,0),(2,153,99),None)],
     "gitlab":      [("CVE-2021-22205","RCE via ExifTool",10.0,(11,9,0),(13,10,2),None),
                     ("CVE-2023-7028","Account takeover password reset",10.0,(16,1,0),(16,7,1),None)],
@@ -105,6 +111,14 @@ def _ver_in_range(detected_ver, min_ver, max_ver):
     return min_ver <= parsed <= max_ver
 
 CVE_PREREQ_PROBES = {
+    "laravel_cookie_probe": {
+        "method": "GET",
+        "path": "/",
+        "extra_headers": {"Cookie": "XSRF-TOKEN=payload"},
+        "check_status": [500],
+        "check_body": ["ErrorException", "unserialize"],
+        "desc": "Laravel cookie deserialization error probe",
+    },
     "iis_webdav": {
         "method": "OPTIONS",
         "path": "/",
