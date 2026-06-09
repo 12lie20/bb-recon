@@ -30,6 +30,16 @@ BUCKETS = {
     "User Profile":       re.compile(r"/(user|profile|account|member|me)(/\d+|/edit|/settings|$)",re.I),
 }
 
+# Tech-Specific Probing Map
+TECH_PROBE_FILTER = {
+    "WordPress": [r"wp-", r"wordpress"],
+    "Laravel":   [r"laravel", r"ignition"],
+    "PHP":       [r"\.php"],
+    "Jenkins":   [r"jenkins"],
+    "Tomcat":    [r"tomcat", r"manager/html", r"host-manager"],
+    "Spring":    [r"spring", r"actuator"],
+}
+
 SENSITIVE_URL_RE = re.compile(
     r"(\.(env|json|yml|yaml|xml|conf|config|cfg|ini|bak|sql|log|key|pem|db|sqlite|swp|rsa|pfx|tar\.gz|tgz)"
     r"|/\.git/|/\.svn/|/wp-config|/settings\.py|/appsettings"
@@ -88,8 +98,7 @@ async def try_403_bypass(session, url, orig_body=""):
     leaf = path.split("/")[-1] if "/" in path else path
     base_dir = "/".join(path.split("/")[:-1]) if "/" in path else ""
     base_full = f"{base}/{base_dir}".rstrip("/")
-    if not leaf:
-        leaf = ""
+    if not leaf: leaf = ""
         
     results = []
     orig_len = len(orig_body) if orig_body else 0
@@ -98,8 +107,7 @@ async def try_403_bypass(session, url, orig_body=""):
         try:
             c, b, _, _ = await http_probe(session, test_url, extra_headers=dict(extra_hdrs), timeout=5, method=method)
             return c, b
-        except:
-            return None, ""
+        except: return None, ""
 
     def is_bypassed(c2, b2):
         if not c2 or c2 in (403, 401, 400, 500, 502, 503): return False
@@ -109,25 +117,22 @@ async def try_403_bypass(session, url, orig_body=""):
             if b2 and orig_body and b2[:100] != orig_body[:100]: return True
         return False
 
-    # 1. Header Bypasses
+    # Header Bypasses
     for hk, hv_tpl, tag in BYPASS_HEADERS:
         hv = hv_tpl.replace("{path}", "/"+path)
         c2, b2 = await bp_probe(url, [(hk, hv)])
-        if is_bypassed(c2, b2):
-            results.append({"technique": tag, "code": c2})
+        if is_bypassed(c2, b2): results.append({"technique": tag, "code": c2})
             
-    # 2. Path/URL Bypasses
+    # Path Bypasses
     for tpl, tag in BYPASS_PATHS:
         test = tpl.replace("{url}",url).replace("{base}", base_full).replace("{leaf}", leaf)
         c2, b2 = await bp_probe(test, [])
-        if is_bypassed(c2, b2):
-            results.append({"technique": tag, "code": c2})
+        if is_bypassed(c2, b2): results.append({"technique": tag, "code": c2})
 
-    # 3. HTTP Method Bypasses (POST, HEAD, PUT, TRACE, OPTIONS)
-    for meth in ["POST", "HEAD", "PUT", "TRACE", "OPTIONS", "PATCH"]:
+    # Method Bypasses
+    for meth in ["POST", "HEAD", "OPTIONS"]:
         c2, b2 = await bp_probe(url, [], method=meth)
-        if c2 and c2 in (200, 201, 204):
-            results.append({"technique": f"method-{meth}", "code": c2})
+        if c2 and c2 in (200, 201, 204): results.append({"technique": f"method-{meth}", "code": c2})
 
     return results
 
@@ -136,13 +141,7 @@ SENSITIVE_KEYWORDS = re.compile(
     r"|AWS_SECRET|AWS_ACCESS|PRIVATE_KEY"
     r"|password\s*=|passwd\s*=|pwd\s*=|secret\s*="
     r"|mysql://|postgres://|mongodb://|redis://|smtp://"
-    r"|-{5}BEGIN|AKIA[0-9A-Z]{16}"
-    r"|root:[x*]:0:0|bin/bash"
-    r"|access_token|refresh_token|client_secret"
-    r"|DB_NAME|DB_PASS|APP_SECRET|JWT_SECRET"
-    r"|swagger|openapi|paths:|definitions:"
-    r"|\"schema\":|\"type\":\s*\"object\"",
-    re.I
+    r"|-{5}BEGIN|AKIA[0-9A-Z]{16}", re.I
 )
 HTML_START_RE = re.compile(r"^\s*(<\?xml|<!doctype|<html|<head|<body|<!--|<\!)",re.I)
 CLOUDFLARE_BLOCK_RE = re.compile(r"(cloudflare|attention required|access denied|security check|ray id)", re.I)
@@ -151,54 +150,52 @@ def validate_200(url, body, ct, size, code, baseline):
     is_sens = bool(SENSITIVE_URL_RE.search(url))
     soft_404 = baseline.get("soft_404", False)
     
-    if not body:
-        return False, "empty-body"
-        
-    # Extremely aggressive WAF/Block validation
+    if not body: return False, "empty-body"
     if code in (403, 401) or CLOUDFLARE_BLOCK_RE.search(body[:1500]):
         return False, "waf-block-page"
         
     if is_sens and "text/html" in ct:
-        # If it's supposed to be a sensitive file (env, key) but returns HTML, it's 99% a false positive
-        if HTML_START_RE.search(body[:500]):
-            return False, "html-content-type"
+        if HTML_START_RE.search(body[:500]): return False, "html-content-type"
             
     if soft_404:
         baseline_size = baseline.get("soft_404_size", 0)
         threshold     = baseline.get("soft_404_threshold", 150)
         if baseline_size > 0 and abs(size - baseline_size) <= threshold:
-            return False, f"size-match-baseline (|{size}-{baseline_size}|≤{threshold})"
-            
-        body_hash = hashlib.md5(body.encode()).hexdigest()
-        if body_hash in baseline.get("soft_404_hashes", []):
-            return False, "hash-match-baseline"
-            
-        clean_body = re.sub(r"<[^>]+>", "", body).strip()[:100].lower()
-        for snip in baseline.get("soft_404_snippets", []):
-            if snip and len(snip) > 20 and snip in clean_body:
-                return False, "snippet-match-baseline"
+            return False, f"size-match-baseline"
                 
     if is_sens and "text/html" not in ct:
-        # Require actual sensitive content if it's not HTML
         if not SENSITIVE_KEYWORDS.search(body[:15000]):
             return False, "no-sensitive-keywords"
             
     return True, "validated"
 
 @ensure_async
-async def run_classifier(urls, baselines, out):
-    section(5,"URL CLASSIFIER  +  STATUS PROBE  (validated)")
+async def run_classifier(urls, baselines, tech_map, out, session=None):
+    section(5,"URL CLASSIFIER + STATUS PROBE")
     
+    close_session = False
+    if session is None:
+        session = aiohttp.ClientSession()
+        close_session = True
+
+    # Smart expansion: only add relevant probes based on tech_map
     extra = set()
-    for u in urls:
-        base = urllib.parse.urlparse(u).scheme + "://" + urllib.parse.urlparse(u).netloc
-        extra.update([f"{base}/.git/config", f"{base}/.env", f"{base}/.svn/entries", f"{base}/info.php"])
+    for host, techs in tech_map.items():
+        base = f"https://{host}"
+        techs_str = " ".join(techs).lower()
+        
+        # Default core probes
+        extra.update([f"{base}/.git/config", f"{base}/.env"])
+        
+        # Tech-specific probes
+        for tech, patterns in TECH_PROBE_FILTER.items():
+            if tech.lower() in techs_str:
+                if tech == "WordPress": extra.add(f"{base}/wp-config.php.bak")
+                if tech == "PHP": extra.add(f"{base}/info.php")
+                if tech == "Tomcat": extra.add(f"{base}/manager/html")
+    
     urls = list(set(urls) | extra)
     
-    soft_404_count = sum(1 for bl in baselines.values() if bl.get("soft_404"))
-    if soft_404_count:
-        info(f"Soft-404 active on {soft_404_count} host(s) — per-host baseline in effect")
-        
     classified=defaultdict(list)
     for u in urls:
         for label, pat in BUCKETS.items():
@@ -209,81 +206,53 @@ async def run_classifier(urls, baselines, out):
     for label, items in classified.items():
         seen=set()
         for u in items:
-            try:
-                p=urllib.parse.urlparse(u).path
-                if p not in seen: seen.add(p); targets.append((label,u))
-            except Exception:
-                targets.append((label,u))
+            p=urllib.parse.urlparse(u).path
+            if p not in seen: seen.add(p); targets.append((label,u))
                 
     info(f"Probing {len(targets)} URLs ...")
-    print(GRY+"│"+RESET)
     
     results = defaultdict(list)
-    filtered_count = 0
     sem = asyncio.Semaphore(CONFIG.max_threads)
 
-    async def probe(session, label, url):
-        nonlocal filtered_count
+    async def probe(label, url):
         async with sem:
-            has_been_bypassed = False
             code, body, hdrs, ms = await http_probe(session, url, timeout=8)
-            
-            # Auto-trigger 403 bypass early for ALL endpoints returning 401/403
             bypass = []
             if code in (401, 403):
                 bypass = await try_403_bypass(session, url, orig_body=body)
-                if bypass:
-                    has_been_bypassed = True
-                    found(f"401/403 bypass successfully exploited → {url}")
-                    # Adopt the best bypassed response for analysis
-                    bph = [b for b in bypass if b["code"] == 200]
-                    if bph: code = 200
+                if any(b["code"] == 200 for b in bypass): code = 200
 
-            if code == 404:
-                return
+            if code == 404: return
+            
             redir = hdrs.get("Location", "")
             ct = hdrs.get("Content-Type", "").lower()
             size = len(body) if body else 0
+            
             if code == 200:
                 host = urllib.parse.urlparse(url).netloc
                 host_bl = baselines.get(host) or next(iter(baselines.values()), {})
                 is_real, reason = validate_200(url, body, ct, size, code, host_bl)
-                if not is_real and not has_been_bypassed:
-                    filtered_count += 1
-                    return
+                if not is_real and not bypass: return
+                
             results[label].append((url, code, redir, ms, bypass))
 
-    async with aiohttp.ClientSession() as session:
-        tasks = [probe(session, label, url) for label, url in targets]
-        await asyncio.gather(*tasks, return_exceptions=True)
+    tasks = [probe(label, url) for label, url in targets]
+    await asyncio.gather(*tasks, return_exceptions=True)
 
-    if filtered_count:
-        info(f"False positives filtered: {filtered_count} URLs (soft-404/HTML/no-keywords)")
+    if close_session: await session.close()
         
     full={}
     for label in BUCKETS:
         items=results.get(label,[])
         if not items: continue
-        items = [(u,c,r,m,b) for u,c,r,m,b in items if c != 404]
-        if not items: continue
-        items.sort(key=lambda x: x[1] not in (200,403,401,500))
         print(GRY+"│  "+RESET+YLW+BOLD+f"[{label}]"+RESET+GRY+f"  ({len(items)})"+RESET)
         for url,code,redir,ms,bypass in items:
-            ms_s=GRY+DIM+f"  {ms}ms"+RESET if ms else ""
-            rd_s=GRY+DIM+f"  → {redir[:50]}"+RESET if redir and code in(301,302) else ""
-            print(GRY+"│    "+RESET+sbadge(code)+"  "+WHT+url+RESET+ms_s+rd_s)
+            print(GRY+"│    "+RESET+sbadge(code)+"  "+WHT+url+RESET)
             for bp in bypass:
-                bc=bp["code"]; tag=bp["technique"]
-                col=GRN+BOLD if bc==200 else YLW
-                print(GRY+"│         "+RESET+col+f"↳ [{tag}] {sbadge(bc)}"+RESET)
-        print(GRY+"│"+RESET)
-        full[label]=[{"url":u,"status":c,"redirect":r,"ms":m,"bypass":b}
-                     for u,c,r,m,b in items]
+                print(GRY+"│         "+RESET+GRN+f"↳ [{bp['technique']}] {sbadge(bp['code'])}"+RESET)
+        full[label]=[{"url":u,"status":c,"redirect":r,"ms":m,"bypass":b} for u,c,r,m,b in items]
                      
     save_json(f"{out}/classified_urls.json",full)
-    v200=sum(1 for v in full.values() for i in v if i["status"]==200)
-    ok(f"Interesting URLs : {BOLD}{sum(len(v) for v in full.values())}{RESET}  "
-       f"({BOLD}{v200}{RESET} validated 200)")
     _end()
     return full
 
