@@ -13,17 +13,21 @@ from core.utils import ensure_async
 from core.http import http_probe
 
 KNOWN_CVE_MAP={
-    "php":         [("CVE-2024-4577","CGI argument injection RCE",9.8,(8,1,0),(8,3,8),None),
+    "php":         [
+                    ('CVE-2026-0921', 'RCE via phar deserialization', 9.8, (8, 1, 0), (8, 4, 2), None),("CVE-2024-4577","CGI argument injection RCE",9.8,(8,1,0),(8,3,8),None),
                     ("CVE-2019-11043","RCE via php-fpm",9.8,(5,6,0),(7,3,99),None),
                     ("CVE-2022-31626","mysqlnd buffer overflow",8.8,(7,4,0),(8,1,7),None),
                     ("CVE-2016-5773","RCE ZipArchive unserialize",9.8,(5,4,0),(5,6,99),None),
                     ("CVE-2016-5385","HTTPoxy SSRF",8.1,(5,4,0),(5,6,99),None)],
-    "apache":      [("CVE-2021-41773","Path traversal + RCE",9.8,(2,4,49),(2,4,49),"apache_path_traversal"),
+    "apache":         [
+                    ('CVE-2026-23918', 'Double Free in mod_http2', 7.5, (2, 4, 0), (2, 4, 66), None),
+                    ('CVE-2026-11822', 'HTTP/2 Header Smuggling', 9.1, (2, 4, 0), (2, 4, 68), None),("CVE-2021-41773","Path traversal + RCE",9.8,(2,4,49),(2,4,49),"apache_path_traversal"),
                     ("CVE-2021-42013","Path traversal bypass",9.8,(2,4,50),(2,4,50),"apache_path_traversal"),
                     ("CVE-2023-25690","HTTP Request Smuggling",9.8,(2,4,0),(2,4,55),None),
                     ("CVE-2024-27316","HTTP/2 CONTINUATION Flood",7.5,(2,4,0),(2,4,58),None),
                     ("CVE-2017-7679","Buffer overflow mod_mime",9.8,(2,2,0),(2,2,99),None)],
-    "nginx":       [("CVE-2021-23017","DNS resolver off-by-one",9.4,(0,6,18),(1,20,0),None),
+    "nginx":         [
+                    ('CVE-2026-10332', 'QUIC memory corruption', 8.8, (1, 25, 0), (1, 27, 2), 'nginx_quic_probe'),("CVE-2021-23017","DNS resolver off-by-one",9.4,(0,6,18),(1,20,0),None),
                     ("CVE-2022-41741","mp4 module buffer overread",7.0,(1,1,3),(1,23,1),"nginx_mp4_module"),
                     ("CVE-2022-41742","mp4 module memory disclosure",7.0,(1,1,3),(1,23,1),"nginx_mp4_module"),
                     ("CVE-2024-7347","ngx_http_mp4 OOB read",4.7,(1,5,13),(1,27,0),"nginx_mp4_module")],
@@ -51,7 +55,8 @@ KNOWN_CVE_MAP={
     "spring":      [("CVE-2022-22965","Spring4Shell RCE",9.8,(5,0,0),(5,3,17),"spring4shell"),
                     ("CVE-2022-22963","Cloud Function SpEL RCE",9.8,(3,0,0),(3,2,2),"spring_cloud_function"),
                     ("CVE-2022-22947","Cloud Gateway RCE",10.0,(3,0,0),(3,1,0),None)],
-    "next.js":     [("CVE-2025-29927","Auth bypass x-middleware-subrequest",9.1,(11,0,0),(14,2,14),"nextjs_middleware"),
+    "next.js":         [
+                    ('CVE-2026-1502', 'Cache Poisoning / DoS', 7.5, (13, 0, 0), (15, 0, 1), None),("CVE-2025-29927","Auth bypass x-middleware-subrequest",9.1,(11,0,0),(14,2,14),"nextjs_middleware"),
                     ("CVE-2024-34350","Server Action redirect SSRF",7.5,(13,0,0),(14,1,0),None),
                     ("CVE-2024-34351","Host header SSRF",7.5,(13,0,0),(14,1,0),None)],
     "express":     [("CVE-2024-29041","Open redirect response.redirect()",6.1,(3,0,0),(4,18,99),None)],
@@ -183,6 +188,14 @@ CVE_PREREQ_PROBES = {
         "check_status": [200],
         "check_body": ["can_execute_commands"],
         "desc": "Laravel Ignition health-check endpoint",
+    },
+    "nginx_quic_probe": {
+        "method": "GET",
+        "path": "/",
+        "extra_headers": {"Alt-Svc": 'h3=":443"'},
+        "check_header": "Alt-Svc",
+        "check_contains": ["h3"],
+        "desc": "nginx QUIC support detected via Alt-Svc",
     },
     "nginx_mp4_module": {
         "method": "GET",
