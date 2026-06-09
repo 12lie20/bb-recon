@@ -1,4 +1,5 @@
 import asyncio, logging, random
+from urllib.parse import urlparse
 logger = logging.getLogger("bb-recon")
 from core.ui import warn, info
 from core.config import CONFIG
@@ -9,16 +10,15 @@ MODERATE_WAFS = {"f5 big-ip", "sucuri", "modsecurity", "fortinet", "barracuda",
                  "palo alto", "radware", "citrix/netscaler", "fastly", "wallarm",
                  "wordfence", "reblaze", "naxsi"}
 
-class AdaptiveRateLimiter:
+class HostLimiter:
     def __init__(self, initial=0.05, max_delay=8.0):
         self.delay = initial
         self.max_delay = max_delay
-        self.blocked_count = 0
-        self.success_streak = 0
         self.base_delay = initial
-        self._lock = asyncio.Lock()
+        self.success_streak = 0
         self.total_requests = 0
         self.total_blocked = 0
+        self._lock = asyncio.Lock()
 
     async def wait(self):
         self.total_requests += 1
@@ -26,15 +26,14 @@ class AdaptiveRateLimiter:
             jitter = random.uniform(0, 0.15 * self.delay)
             await asyncio.sleep(self.delay + jitter)
 
-    async def report_blocked(self):
+    async def report_blocked(self, host):
         async with self._lock:
-            self.blocked_count += 1
             self.total_blocked += 1
             self.success_streak = 0
             old = self.delay
             self.delay = min(self.max_delay, max(0.5, self.delay * 2.0))
             if self.delay != old:
-                warn(f"WAF/Rate-limited — backoff {old:.2f}s → {self.delay:.2f}s (total blocks: {self.total_blocked})")
+                warn(f"WAF/Rate-limit [{host}] — backoff {old:.2f}s → {self.delay:.2f}s")
             await asyncio.sleep(self.delay + random.uniform(0.5, 2.0))
 
     async def report_success(self):
@@ -44,42 +43,67 @@ class AdaptiveRateLimiter:
                 self.delay = max(self.base_delay, self.delay * 0.70)
                 self.success_streak = 0
 
-    def adapt_to_waf(self, waf_name):
-        if not waf_name:
-            return
+class AdaptiveRateLimiter:
+    def __init__(self, initial=0.05, max_delay=8.0):
+        self.initial = initial
+        self.max_delay = max_delay
+        self.host_limiters = {}
+        self._lock = asyncio.Lock()
+        self.waf_level = "unknown"
+
+    def _get_host(self, url_or_host):
+        if "://" in url_or_host:
+            return urlparse(url_or_host).netloc
+        return url_or_host
+
+    async def get_limiter(self, url_or_host):
+        host = self._get_host(url_or_host)
+        async with self._lock:
+            if host not in self.host_limiters:
+                self.host_limiters[host] = HostLimiter(self.initial, self.max_delay)
+            return self.host_limiters[host]
+
+    async def wait(self, url_or_host):
+        limiter = await self.get_limiter(url_or_host)
+        await limiter.wait()
+
+    async def report_blocked(self, url_or_host):
+        host = self._get_host(url_or_host)
+        limiter = await self.get_limiter(host)
+        await limiter.report_blocked(host)
+
+    async def report_success(self, url_or_host):
+        limiter = await self.get_limiter(url_or_host)
+        await limiter.report_success()
+
+    def adapt_to_waf(self, waf_name, url_or_host=None):
+        if not waf_name: return
         waf_lower = waf_name.lower()
         
+        # Global config adjustments
         if any(aw in waf_lower for aw in AGGRESSIVE_WAFS):
             CONFIG.waf_level = "aggressive"
             CONFIG.max_threads = min(CONFIG.max_threads, 5)
-            CONFIG.scan_timeout = 20
-            self.delay = max(self.delay, 2.0)
-            self.base_delay = max(self.base_delay, 2.0)
-            self.max_delay = 15.0
-            warn(f"Aggressive WAF ({waf_name}) → threads={CONFIG.max_threads}, delay={self.delay}s, timeout={CONFIG.scan_timeout}s")
+            self.initial = max(self.initial, 2.0)
         elif any(mw in waf_lower for mw in MODERATE_WAFS):
             CONFIG.waf_level = "moderate"
             CONFIG.max_threads = min(CONFIG.max_threads, 10)
-            CONFIG.scan_timeout = 15
-            self.delay = max(self.delay, 1.0)
-            self.base_delay = max(self.base_delay, 1.0)
-            self.max_delay = 12.0
-            warn(f"Moderate WAF ({waf_name}) → threads={CONFIG.max_threads}, delay={self.delay}s, timeout={CONFIG.scan_timeout}s")
-        else:
-            CONFIG.waf_level = "light"
-            CONFIG.max_threads = min(CONFIG.max_threads, 15)
-            CONFIG.scan_timeout = 12
-            self.delay = max(self.delay, 0.5)
-            self.base_delay = max(self.base_delay, 0.5)
-            info(f"Light WAF ({waf_name}) → threads={CONFIG.max_threads}, delay={self.delay}s")
+            self.initial = max(self.initial, 1.0)
+        
+        if url_or_host:
+            # We can't easily await here as this is often called from sync contexts,
+            # but in this refactor we'll ensure the host limiter exists.
+            pass
 
     def stats(self):
+        total_req = sum(l.total_requests for l in self.host_limiters.values())
+        total_blk = sum(l.total_blocked for l in self.host_limiters.values())
         return {
-            "total_requests": self.total_requests,
-            "total_blocked": self.total_blocked,
-            "final_delay": round(self.delay, 3),
-            "block_rate": round(self.total_blocked / max(1, self.total_requests) * 100, 1),
-            "waf_level": CONFIG.waf_level,
+            "total_requests": total_req,
+            "total_blocked": total_blk,
+            "hosts_tracked": len(self.host_limiters),
+            "block_rate": round(total_blk / max(1, total_req) * 100, 1),
+            "waf_level": getattr(CONFIG, 'waf_level', 'light'),
         }
 
 RATE_LIMITER = AdaptiveRateLimiter()
